@@ -34,6 +34,8 @@ The syntax is designed to be simple and intuitive.
 Quick Start
 Provide a target URL and a wordlist—that's all it takes.
 
+For Web View run webscan.py
+
 
 python ./webscan -u <TARGET_URL> -w <WORDLIST_PATH>
 
