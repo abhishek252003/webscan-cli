@@ -1,0 +1,164 @@
+import requests
+import threading
+import queue
+import argparse
+import sys
+import shutil # Used to get terminal width
+
+# --- A simple class for adding color to terminal output ---
+class Colors:
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    END = '\033[0m'
+    BOLD = '\033[1m'
+
+# --- Global variables ---
+work_queue = queue.Queue()
+results = {
+    "2xx": [], "3xx": [], "403": [], "5xx": [], "other": []
+}
+print_lock = threading.Lock()
+stop_event = threading.Event()
+
+def print_banner():
+    """Prints a stylish and clear banner with author info."""
+    # YOUR CUSTOM BANNER - RESTORED
+    banner_art = r"""
+ █████   ███   █████ ██████████ ███████████             █████████   █████████   █████████  ██████  █████
+░░███   ░███  ░░███ ░░███░░░░░█░░███░░░░░███           ███░░░░░███ ███░░░░░███ ███░░░░░███ ░░██████ ░░███
+ ░███   ░███   ░███  ░███  █ ░  ░███    ░███           ░███    ░░░ ███     ░░░ ░███    ░███  ░███░███ ░███
+ ░███   ░███   ░███  ░██████    ░██████████  ██████████░░█████████ ░███         ░███████████  ░███░░███░███
+ ░░███  █████  ███   ░███░░█    ░███░░░░░███░░░░░░░░░░  ░░░░░░░░███░███         ░███░░░░░███  ░███ ░░██████
+  ░░░█████░█████░    ░███ ░  █ ░███    ░███            ███     ░███░░███     ███ ░███    ░███  ░███  ░░█████
+   ░░███ ░░███      ██████████ ███████████             ░░█████████  ░░█████████  █████   █████ █████  ░░█████
+    ░░░   ░░░      ░░░░░░░░░░ ░░░░░░░░░░░               ░░░░░░░░░    ░░░░░░░░░  ░░░░░   ░░░░░ ░░░░░    ░░░░░
+    """
+    # --- YOUR INFO HERE ---
+    your_name = "ABHISHEK CHAURASIA"
+    github_user = "Abhishek252003"
+    github_link = f"https://github.com/{github_user}"
+    # --------------------
+
+    print(f"{Colors.BOLD}{Colors.CYAN}{banner_art}{Colors.END}")
+    print(f"    {Colors.BOLD}A Web Directory Scanner by {your_name}{Colors.END}")
+    print(f"    {Colors.BLUE}GitHub: {github_link}{Colors.END}")
+    print("-" * 60)
+
+
+def worker(base_url, user_agent):
+    """The function that each thread will execute."""
+    base_url = base_url.rstrip('/')
+    while not work_queue.empty() and not stop_event.is_set():
+        try:
+            path = work_queue.get_nowait()
+            full_url = f"{base_url}/{path}"
+            
+            try:
+                response = requests.get(full_url, headers={'User-Agent': user_agent}, timeout=5, allow_redirects=False)
+                
+                if response.status_code != 404:
+                    status = response.status_code
+                    result_str = f"/{path} (Status: {status})"
+                    
+                    if 200 <= status < 300:
+                        color, category = Colors.GREEN, "2xx"
+                    elif status == 403:
+                        color, category = Colors.RED, "403"
+                    elif 300 <= status < 400:
+                        color, category = Colors.BLUE, "3xx"
+                    elif 500 <= status < 600:
+                        color, category = Colors.YELLOW, "5xx"
+                    else:
+                        color, category = Colors.YELLOW, "other"
+                    
+                    with print_lock:
+                        results[category].append(result_str)
+                        print(f"{color}[+] Found: {full_url} (Status: {status}){Colors.END}")
+
+            except requests.RequestException:
+                pass
+                
+        except queue.Empty:
+            break
+        finally:
+            work_queue.task_done()
+
+def print_summary():
+    """Prints the final summary in a side-by-side columnar format."""
+    print("\n" + "=" * 60)
+    print(f"[*] {Colors.BOLD}Scan Finished!{Colors.END}")
+    print(f"[*] {Colors.GREEN}Total paths found (2xx): {len(results['2xx'])}{Colors.END}")
+    print("=" * 60 + "\n")
+
+    headers = {
+        "2xx": f"{Colors.GREEN}Success (2xx){Colors.END}",
+        "403": f"{Colors.RED}Forbidden (403){Colors.END}",
+        "3xx": f"{Colors.BLUE}Redirects (3xx){Colors.END}",
+        "5xx": f"{Colors.YELLOW}Server Errors (5xx){Colors.END}"
+    }
+    
+    terminal_width = shutil.get_terminal_size().columns
+    num_columns = 4
+    col_width = terminal_width // num_columns
+
+    header_str = "".join(h.ljust(col_width) for h in headers.values())
+    print(header_str)
+    print("-" * min(terminal_width, col_width * num_columns))
+
+    max_rows = max(len(v) for v in results.values()) if any(results.values()) else 0
+    categories = ["2xx", "403", "3xx", "5xx"]
+    
+    for i in range(max_rows):
+        row_data = []
+        for cat in categories:
+            try:
+                item = results[cat][i]
+                if len(item) > col_width - 1: item = item[:col_width - 4] + "..."
+                row_data.append(item.ljust(col_width))
+            except IndexError:
+                row_data.append("".ljust(col_width))
+        print("".join(row_data))
+
+def main():
+    print_banner()
+
+    parser = argparse.ArgumentParser(description="A Web Directory Scanner.")
+    parser.add_argument("-u", "--url", required=True, help="Target URL")
+    parser.add_argument("-w", "--wordlist", required=True, help="Path to the wordlist file")
+    parser.add_argument("-t", "--threads", type=int, default=10, help="Number of threads (default: 10)")
+    parser.add_argument("-a", "--user-agent", default="Mozilla/5.0", help="User-Agent for requests")
+    args = parser.parse_args()
+
+    print(f"[*] {Colors.BOLD}Target:{Colors.END}     {args.url}")
+    print(f"[*] {Colors.BOLD}Wordlist:{Colors.END}   {args.wordlist}")
+    print(f"[*] {Colors.BOLD}Threads:{Colors.END}    {args.threads}")
+    print("-" * 60)
+    
+    try:
+        with open(args.wordlist, 'r', encoding='utf-8', errors='ignore') as f:
+            words = [line.strip() for line in f if line.strip()]
+            for word in words:
+                work_queue.put(word)
+        print(f"[*] Starting scan with {len(words)} paths...\n")
+    except FileNotFoundError:
+        print(f"{Colors.RED}[!] Error: Wordlist file not found.{Colors.END}")
+        sys.exit(1)
+        
+    try:
+        threads = []
+        for _ in range(args.threads):
+            t = threading.Thread(target=worker, args=(args.url, args.user_agent), daemon=True)
+            t.start()
+            threads.append(t)
+        work_queue.join()
+    except KeyboardInterrupt:
+        print(f"\n{Colors.YELLOW}[!] Scan stopped by user.{Colors.END}")
+        stop_event.set()
+        
+    print_summary()
+
+if __name__ == "__main__":
+    main()
